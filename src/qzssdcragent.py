@@ -437,6 +437,7 @@ if __name__ == '__main__':
     parser.add_argument('-r',action='store',dest='report_file',default=DEFAULT_REPORTPATH)
     parser.add_argument('-l',action='store',dest='log_level',default=logging.INFO)
     parser.add_argument('-n',action='store_true',dest='no_report',default=False)
+    parser.add_argument('-t',action='store_true',dest='test_only',default=False)
     args = parser.parse_args()
 
     # ログの準備
@@ -543,5 +544,10 @@ if __name__ == '__main__':
     if fail:
         log.error('Terminate...')
         sys.exit(2)
+
+    if args.test_only:
+        log.error('-t option set. not execute.')
+        log.error('Terminate...')
+        sys.exit(4)
 
     main()
