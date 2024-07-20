@@ -114,7 +114,7 @@ DEFAULT_CONFIG = {
         'IgnoreFilterWhenTraining':1,
         },
     'ReportFile' : {
-        'Use':0,
+        'Use':1,
         'Path':'/var/log/qzssdcragent.log',
         'When':'D',
         'Interval':7,
@@ -123,7 +123,7 @@ DEFAULT_CONFIG = {
         'ReportTraining':1,
         },
     'StdOut' : {
-        'Use':1,
+        'Use':0,
         'IgnoreFilter':0,
         'ReportTraining':1,
         },
