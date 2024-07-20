@@ -11,16 +11,13 @@ qzssdcragent (災害・危機管理通報受信エージェント)
 * **L1Sの受信に対応した**GNSSモジュール (u-blox MAX-M10S 等)
 * その他、接続ケーブルやGNSSアンテナ 等
 
-**※現時点ではu-bloxモジュールのみ対応**
-
 必要なソフトウェア
 -
-* Ubuntu 22.04 LTS (動作確認済みのバージョン)
+* Ubuntu 24.04 LTS (動作確認済みのバージョン)
 * gpsd
 * gpsd-clients
-* gpsd-tools
-* python3 (3.10.6で動作確認済み)
-* pip3
-* (pip) azarashi
+* python3 (3.12.3で動作確認済み)
+* python3-pip
+* (pip3) azarashi (0.10.2)
 
 (作成中)

@@ -26,8 +26,6 @@
 
 import argparse
 import configparser
-import json
-import re
 import signal
 import smtplib
 import ssl
@@ -35,6 +33,7 @@ import subprocess
 import sys
 import os
 import time
+import io
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 import logging
@@ -45,50 +44,16 @@ import azarashi
 from azarashi.qzss_dcr_lib.definition import *
 from azarashi.qzss_dcr_lib.report import qzss_dc_report
 
-NAME = 'qzssdcragent'
-
-RE_GPSMON_PACKET = re.compile(r'^\(([0-9]+)\) ([0-9a-f]+)$')
-RE_GPSMON_JSON = re.compile(r'^\(([0-9]+)\) ({.*})$')
-RE_UBLOXHEX_SFRBX_QZSS = re.compile(r'^b5620213(..)0005(..)')
-
 DATETIME_FORMAT = '%Y/%m/%d %H:%M:%S'
 
-DEFAULT_CONFPATH = f'/etc/{NAME}.conf'
-DEFAULT_REPORTPATH = f'/var/log/{NAME}.log'
+DEFAULT_CONFPATH = '/etc/qzssdcragent.conf'
 
 DEFAULT_CONFIG = {
-    'QzssDcReportJmaEarthquakeEarlyWarning' : {
-        'Use':1,
-        'Regions':'',
-        },
-    'QzssDcReportJmaHypocenter' : {
-        'Use':1,
-        },
-    'QzssDcReportJmaSeismicIntensity' : {
-        'Use':1,
-        'Prefectures':'',
-        },
-    'QzssDcReportJmaNankaiTroughEarthquake' : {
-        'Use':1,
-        'ReportIncompleteInfo':0,
-        },
-    'QzssDcReportJmaTsunami' : {
-        'Use':1,
-        'Regions':'',
-        },
-    'QzssDcReportJmaNorthwestPacificTsunami' : {
-        'Use':1,
-        'Regions':'',
-        },
-    'QzssDcReportJmaVolcano' : {
-        'Use':1,
-        'LocalGovernments':'',
-        },
     'QzssDcReportJmaAshFall' : {
         'Use':1,
         'LocalGovernments':'',
         },
-    'QzssDcReportJmaWeather' : {
+    'QzssDcReportJmaEarthquakeEarlyWarning' : {
         'Use':1,
         'Regions':'',
         },
@@ -96,12 +61,71 @@ DEFAULT_CONFIG = {
         'Use':1,
         'Regions':'',
         },
-    'QzssDcReportJmaTyphoon' : {
+    'QzssDcReportJmaHypocenter' : {
         'Use':1,
         },
     'QzssDcReportJmaMarine' : {
         'Use':1,
         'Regions':'',
+        },
+    'QzssDcReportJmaNankaiTroughEarthquake' : {
+        'Use':1,
+        'ReportIncompleteInfo':0,
+        },
+    'QzssDcReportJmaNorthwestPacificTsunami' : {
+        'Use':1,
+        'Regions':'',
+        },
+    'QzssDcReportJmaSeismicIntensity' : {
+        'Use':1,
+        'Prefectures':'',
+        },
+    'QzssDcReportJmaTsunami' : {
+        'Use':1,
+        'Regions':'',
+        },
+    'QzssDcReportJmaTyphoon' : {
+        'Use':1,
+        },
+    'QzssDcReportJmaVolcano' : {
+        'Use':1,
+        'LocalGovernments':'',
+        },
+    'QzssDcReportJmaWeather' : {
+        'Use':1,
+        'Regions':'',
+        },
+    'QzssDcxJAlert' : {
+        'Use':0,
+        },
+    'QzssDcxLAlert' : {
+        'Use':0,
+        },
+    'QzssDcxMTInfo' : {
+        'Use':0,
+        },
+    'QzssDcxOutsideJapan' : {
+        'Use':0,
+        },
+    'Input' : {
+        'CmdLine':'gpspipe -R',
+        'Type':'ublox',
+        'CacheValidPeriodHour':24,
+        'IgnoreFilterWhenTraining':1,
+        },
+    'ReportFile' : {
+        'Use':0,
+        'Path':'/var/log/qzssdcragent.log',
+        'When':'D',
+        'Interval':7,
+        'BackupCount':5,
+        'IgnoreFilter':0,
+        'ReportTraining':1,
+        },
+    'StdOut' : {
+        'Use':1,
+        'IgnoreFilter':0,
+        'ReportTraining':1,
         },
     'Mail' : {
         'Use':0,
@@ -113,14 +137,8 @@ DEFAULT_CONFIG = {
         'Tls':0,
         'Ssl':0,
         'SuplessHeaderFromText':1,
-        },
-    'Cache' : {
-        'ValidPeriodHour':24,
-        },
-    'General' : {
-        'FilterTraining':0,
-        'ReportAllInfo':1,
-        'ReportRawPacket':0,
+        'IgnoreFilter':0,
+        'ReportTraining':1,
         },
 }
 
@@ -189,12 +207,14 @@ def send_mail(subject:str, text:str, clsname:str):
         log.exception(e)
         log.warning(f'Mail: {clsname} send failed.')
 
-def process_mail(dt:datetime, item):
+def process_mail(dt:datetime, item, filtered, training):
 
     if not config.getboolean('Mail','Use'):
-        log.info(f'Mail: {item.__class__.__name__} skipped. (Use=0):')
         return
-
+    if training and not config.getboolean('Mail','ReportTraining'):
+        return
+    if filtered and not config.getboolean('Mail','IgnoreFilter'):
+        return
     subject = item.get_header()
     text = str(item)
     if config.getboolean('Mail','SuplessHeaderFromText'):
@@ -203,67 +223,46 @@ def process_mail(dt:datetime, item):
     text += f'\n\n情報受信時刻: {dt.strftime(DATETIME_FORMAT)}\n'
     send_mail(subject, text, item.__class__.__name__)
 
+def process_report_file(dtcurrent:datetime, item, filtered, training):
+
+    if training and not config.getboolean('ReportFile','ReportTraining'):
+        return
+    if filtered and not config.getboolean('ReportFile','IgnoreFilter'):
+        return
+    report.info(f'\n----- {dtcurrent.strftime(DATETIME_FORMAT)} --------------------')
+    report.info(item)
+
+def process_stdout(dtcurrent:datetime, item, filtered, training):
+
+    if not config.getboolean('StdOut','Use'):
+        return
+    if training and not config.getboolean('StdOut','ReportTraining'):
+        return
+    if filtered and not config.getboolean('StdOut','IgnoreFilter'):
+        return
+    print(f'\n----- {dtcurrent.strftime(DATETIME_FORMAT)} --------------------')
+    print(item)
+
 def process_report(dtcurrent:datetime, item):
 
+    # 訓練かどうかの確認
+    training = False
+    if isinstance(item, qzss_dc_report.QzssDcReportJmaBase):
+        if item.report_classification_no == 7:
+            training = True
+    elif isinstance(item, qzss_dc_report.QzssDcXtendedMessageBase):
+        if item.camf.a1 == 0:
+            training = True
+
+    # 各クラス毎の確認
     filtered = False
-    if config.getboolean('General','FilterTraining') and item.report_classification_no == 7:
-        filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaEarthquakeEarlyWarning):
-        if not config.getboolean('QzssDcReportJmaEarthquakeEarlyWarning','Use'):
-            log.info('DCReport: QzssDcReportJmaEarthquakeEarlyWarning Skipped. (Use=0)')
-            filtered = True
-        else:
-            regions = config.get('QzssDcReportJmaEarthquakeEarlyWarning','Regions').split(',')
-            if not check_partial_match(regions, item.eew_forecast_regions):
-                log.info('DCReport: QzssDcReportJmaEarthquakeEarlyWarning Skipped. (Region not found)')
-                filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaHypocenter):
-        if not config.getboolean('QzssDcReportJmaHypocenter','Use'):
-            log.info('DCReport: QzssDcReportJmaHypocenter Skipped. (Use=0)')
-            filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaSeismicIntensity):
-        if not config.getboolean('QzssDcReportJmaSeismicIntensity','Use'):
-            log.info('DCReport: QzssDcReportJmaSeismicIntensity Skipped. (Use=0)')
-            filtered = True
-        else:
-            prefectures = config.get('QzssDcReportJmaSeismicIntensity','Prefectures').split(',')
-            if not check_partial_match(prefectures, item.prefectures):
-                log.info('DCReport: QzssDcReportJmaSeismicIntensity Skipped. (Prefecture not found)')
-                filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaNankaiTroughEarthquake):
-        if not config.getboolean('QzssDcReportJmaNankaiTroughEarthquake','Use'):
-            log.info('DCReport: QzssDcReportJmaNankaiTroughEarthquake Skipped. (Use=0)')
-            filtered = True
-        elif not config.getboolean('QzssDcReportJmaNankaiTroughEarthquake','ReportIncompleteInfo') and not item.completed:
-            log.info('DCReport: QzssDcReportJmaNankaiTroughEarthquake Skipped. (Incomplete)')
-            filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaTsunami):
-        if not config.getboolean('QzssDcReportJmaTsunami','Use'):
-            log.info('DCReport: QzssDcReportJmaTsunami Skipped. (Use=0)')
-            filtered = True
-        else:
-            regions = config.get('QzssDcReportJmaTsunami','Regions').split(',')
-            if not check_partial_match(regions, item.tsunami_forecast_regions):
-                log.info('DCReport: QzssDcReportJmaTsunami Skipped. (Region not found)')
-                filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaNorthwestPacificTsunami):
-        if not config.getboolean('QzssDcReportJmaNorthwestPacificTsunami','Use'):
-            log.info('DCReport: QzssDcReportJmaNorthwestPacificTsunami Skipped. (Use=0)')
-            filtered = True
-        else:
-            regions = config.get('QzssDcReportJmaNorthwestPacificTsunami','Regions').split(',')
-            if not check_partial_match(regions, item.coastal_regions_en):
-                log.info('DCReport: QzssDcReportJmaNorthwestPacificTsunami Skipped. (Region not found)')
-                filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaVolcano):
-        if not config.getboolean('QzssDcReportJmaVolcano','Use'):
-            log.info('DCReport: QzssDcReportJmaVolcano Skipped. (Use=0)')
-            filtered = True
-        else:
-            lg = config.get('QzssDcReportJmaVolcano','LocalGovernments').split(',')
-            if not check_partial_match(lg, item.local_governments):
-                log.info('DCReport: QzssDcReportJmaVolcano Skipped. (LocalGovernment not found)')
-                filtered = True
+    if isinstance(item, qzss_dc_report.QzssDcxNullMsg):
+        # Nullメッセージは常に無視
+        return
+    elif isinstance(item, qzss_dc_report.QzssDcxUnknown):
+        # Unknownメッセージは警告を表示
+        log.warning(f'QzssDcxUnknown: {item}')
+        return
     elif isinstance(item, qzss_dc_report.QzssDcReportJmaAshFall):
         if not config.getboolean('QzssDcReportJmaAshFall','Use'):
             log.info('DCReport: QzssDcReportJmaAshFall Skipped. (Use=0)')
@@ -273,14 +272,14 @@ def process_report(dtcurrent:datetime, item):
             if not check_partial_match(lg, item.local_governments):
                 log.info('DCReport: QzssDcReportJmaAshFall Skipped. (LocalGovernment not found)')
                 filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaWeather):
-        if not config.getboolean('QzssDcReportJmaWeather','Use'):
-            log.info('DCReport: QzssDcReportJmaWeather Skipped. (Use=0)')
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaEarthquakeEarlyWarning):
+        if not config.getboolean('QzssDcReportJmaEarthquakeEarlyWarning','Use'):
+            log.info('DCReport: QzssDcReportJmaEarthquakeEarlyWarning Skipped. (Use=0)')
             filtered = True
         else:
-            regions = config.get('QzssDcReportJmaWeather','Regions').split(',')
-            if not check_partial_match(regions, item.weather_forecast_regions):
-                log.info('DCReport: QzssDcReportJmaWeather Skipped. (Region not found)')
+            regions = config.get('QzssDcReportJmaEarthquakeEarlyWarning','Regions').split(',')
+            if not check_partial_match(regions, item.eew_forecast_regions):
+                log.info('DCReport: QzssDcReportJmaEarthquakeEarlyWarning Skipped. (Region not found)')
                 filtered = True
     elif isinstance(item, qzss_dc_report.QzssDcReportJmaFlood):
         if not config.getboolean('QzssDcReportJmaFlood','Use'):
@@ -291,9 +290,9 @@ def process_report(dtcurrent:datetime, item):
             if not check_partial_match(regions, item.flood_forecast_regions):
                 log.info('DCReport: QzssDcReportJmaFlood Skipped. (Region not found)')
                 filtered = True
-    elif isinstance(item, qzss_dc_report.QzssDcReportJmaTyphoon):
-        if not config.getboolean('QzssDcReportJmaTyphoon','Use'):
-            log.info('DCReport: QzssDcReportJmaTyphoon Skipped. (Use=0)')
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaHypocenter):
+        if not config.getboolean('QzssDcReportJmaHypocenter','Use'):
+            log.info('DCReport: QzssDcReportJmaHypocenter Skipped. (Use=0)')
             filtered = True
     elif isinstance(item, qzss_dc_report.QzssDcReportJmaMarine):
         if not config.getboolean('QzssDcReportJmaMarine','Use'):
@@ -304,65 +303,100 @@ def process_report(dtcurrent:datetime, item):
             if not check_partial_match(regions, item.marine_forecast_regions):
                 log.info('DCReport: QzssDcReportJmaMarine Skipped. (Region not found)')
                 filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaNankaiTroughEarthquake):
+        if not config.getboolean('QzssDcReportJmaNankaiTroughEarthquake','Use'):
+            log.info('DCReport: QzssDcReportJmaNankaiTroughEarthquake Skipped. (Use=0)')
+            filtered = True
+        elif not config.getboolean('QzssDcReportJmaNankaiTroughEarthquake','ReportIncompleteInfo') \
+                and not item.completed:
+            log.info('DCReport: QzssDcReportJmaNankaiTroughEarthquake Skipped. (Incomplete)')
+            filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaNorthwestPacificTsunami):
+        if not config.getboolean('QzssDcReportJmaNorthwestPacificTsunami','Use'):
+            log.info('DCReport: QzssDcReportJmaNorthwestPacificTsunami Skipped. (Use=0)')
+            filtered = True
+        else:
+            regions = config.get('QzssDcReportJmaNorthwestPacificTsunami','Regions').split(',')
+            if not check_partial_match(regions, item.coastal_regions_en):
+                log.info('DCReport: QzssDcReportJmaNorthwestPacificTsunami Skipped. (Region not found)')
+                filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaSeismicIntensity):
+        if not config.getboolean('QzssDcReportJmaSeismicIntensity','Use'):
+            log.info('DCReport: QzssDcReportJmaSeismicIntensity Skipped. (Use=0)')
+            filtered = True
+        else:
+            prefectures = config.get('QzssDcReportJmaSeismicIntensity','Prefectures').split(',')
+            if not check_partial_match(prefectures, item.prefectures):
+                log.info('DCReport: QzssDcReportJmaSeismicIntensity Skipped. (Prefecture not found)')
+                filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaTsunami):
+        if not config.getboolean('QzssDcReportJmaTsunami','Use'):
+            log.info('DCReport: QzssDcReportJmaTsunami Skipped. (Use=0)')
+            filtered = True
+        else:
+            regions = config.get('QzssDcReportJmaTsunami','Regions').split(',')
+            if not check_partial_match(regions, item.tsunami_forecast_regions):
+                log.info('DCReport: QzssDcReportJmaTsunami Skipped. (Region not found)')
+                filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaTyphoon):
+        if not config.getboolean('QzssDcReportJmaTyphoon','Use'):
+            log.info('DCReport: QzssDcReportJmaTyphoon Skipped. (Use=0)')
+            filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaVolcano):
+        if not config.getboolean('QzssDcReportJmaVolcano','Use'):
+            log.info('DCReport: QzssDcReportJmaVolcano Skipped. (Use=0)')
+            filtered = True
+        else:
+            lg = config.get('QzssDcReportJmaVolcano','LocalGovernments').split(',')
+            if not check_partial_match(lg, item.local_governments):
+                log.info('DCReport: QzssDcReportJmaVolcano Skipped. (LocalGovernment not found)')
+                filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaWeather):
+        if not config.getboolean('QzssDcReportJmaWeather','Use'):
+            log.info('DCReport: QzssDcReportJmaWeather Skipped. (Use=0)')
+            filtered = True
+        else:
+            regions = config.get('QzssDcReportJmaWeather','Regions').split(',')
+            if not check_partial_match(regions, item.weather_forecast_regions):
+                log.info('DCReport: QzssDcReportJmaWeather Skipped. (Region not found)')
+                filtered = True
     else:
         log.warning(f'Unknown DCReport instance: {type(item)}')
+        return
 
     if item.timestamp is not None:
         dt = item.timestamp
     else:
         dt = dtcurrent
 
+    # 訓練時はフィルターを無視する
+    if training and config.getboolean('Input','IgnoreFilterWhenTraining'):
+        filtered = False
+
     # レポートファイルへの出力
-    if (not filtered) or config.getboolean('General','ReportAllInfo'):
-        report.info(item)
-
+    process_report_file(dt, item, filtered, training)
     # メール送信
-    if not filtered:
-        process_mail(dt, item)
+    process_mail(dt, item, filtered, training)
+    # 標準出力
+    process_stdout(dt, item, filtered, training)
 
-def process_packet_json(packet:str):
-
-    try:
-        log.info(f'gpsmon info: {json.loads(packet)}')
-        # TODO: gpsdのドライバの確認
-    except:
-        log.info(f'gpsmon info(raw): {packet}')
-    pass
-
-def process_packet_raw(packet:str):
+def dcr_report_handler(report, *callback_args, **callback_kwargs):
 
     # 受信時刻
-    dtcurrent = datetime.now()
-
-    # TODO: u-blox以外のドライバへの対応
-    # QZSSのSFRBXかどうかの確認
-    r = re.match(RE_UBLOXHEX_SFRBX_QZSS, packet)
-    if r is None:
-        return
-
-    # RAWパケットをレポートする
-    if config.getboolean('General','ReportRawPacket'):
-        report.info(f'Raw packet: {packet}')
-
-    # デコード
-    binpacket = bytes.fromhex(packet)
-    try:
-        item = azarashi.decode(binpacket, msg_type='ublox')
-    except:
-        return
+    dtcurrent = datetime.now() 
 
     # キャッシュの確認と追加、レポートの処理
     found = False
     for dtcached, obj in cache:
-        if obj == item:
+        if obj == report:
             found = True
             break
     if not found:
-        cache.append((dtcurrent, item))
-        process_report(dtcurrent, item)
+        cache.append((dtcurrent, report))
+        process_report(dtcurrent, report)
 
     # 期限切れキャッシュの削除
-    validperiod = config.getint('Cache','ValidPeriodHour')
+    validperiod = config.getint('Input','CacheValidPeriodHour')
     dtexpire = dtcurrent - timedelta(hours=validperiod)
     while len(cache) > 0:
         dtcached, obj = cache[0]
@@ -381,44 +415,46 @@ def main():
     # メインループ
     while True:
 
-        log.info('gpsmon process starting...')
+        log.info('subprocess starting...')
 
         try:
             
-            # gpsmonコマンドの実行
+            # gpspipe等のコマンドの実行
             with subprocess.Popen(
-                    ['stdbuf','-oL','gpsmon','-a']
+                    args=config.get('Input','CmdLine').split(' ')
                     ,stdout=subprocess.PIPE
                     ,stderr=subprocess.DEVNULL
                     ,bufsize=0
-                    ,text=True ) as gpsmon:
+                    ,text=False ) as watchproc:
 
-                log.info('gpsmon process started. Wait for receiving messages...')
+                log.info('subprocess started. Wait for receiving messages...')
 
-                # gpsmonの出力を読み込む
-                for line in gpsmon.stdout:
-
-                    # 通常パケットの処理
-                    r = re.match(RE_GPSMON_PACKET, line)
-                    if r is not None:
-                        packet = r.group(2)
-                        process_packet_raw(packet)
-                        continue
-
-                    # JSONパケットの処理
-                    r = re.match(RE_GPSMON_JSON, line)
-                    if r is not None:
-                        packet = r.group(2)
-                        process_packet_json(packet)
-                        continue
+                # デコード処理
+                with io.BufferedReader(watchproc.stdout, buffer_size=1) as stream:
+                    while True:
+                        try:
+                            azarashi.decode_stream(
+                                stream=stream
+                                ,msg_type=config.get('Input','Type')
+                                ,callback=dcr_report_handler
+                                ,unique=False
+                                ,ignore_dcr=False
+                                ,ignore_dcx=False)
+                        except (azarashi.QzssDcrDecoderException, azarashi.QzssDcrDecoderNotImplementedError) as e:
+                            log.exception(e)
+                            log.error('decode_stream occurred exception! Retry...')
+                        except Exception as e:
+                            log.exception(e)
+                            log.error('decode_stream occurred exception! Terminate...')
+                            sys.exit(3)
 
         except Exception as e:
             log.exception(e)
-            log.error('gpsmon process occurred exception! Terminate...')
+            log.error('subprocess occurred exception! Terminate...')
             sys.exit(3)
 
-        # gpsmonが終了してしまった場合は5秒待ってから再度実行
-        log.warning('gpsmon process terminated. Retry after 5 seconds...')
+        # watch processが終了してしまった場合は5秒待ってから再度実行
+        log.warning('Watch process terminated. Retry after 5 seconds...')
         time.sleep(5)
 
 if __name__ == '__main__':
@@ -434,9 +470,7 @@ if __name__ == '__main__':
     # コマンドパラメーターの解析
     parser = argparse.ArgumentParser()
     parser.add_argument('-c',action='store',dest='config_file',default=DEFAULT_CONFPATH)
-    parser.add_argument('-r',action='store',dest='report_file',default=DEFAULT_REPORTPATH)
-    parser.add_argument('-l',action='store',dest='log_level',default=logging.INFO)
-    parser.add_argument('-n',action='store_true',dest='no_report',default=False)
+    parser.add_argument('-l',action='store',dest='log_level',type=int,default=logging.INFO)
     parser.add_argument('-t',action='store_true',dest='test_only',default=False)
     args = parser.parse_args()
 
@@ -447,23 +481,6 @@ if __name__ == '__main__':
     log_handler.setFormatter(log_formatter)
     log.addHandler(log_handler)
     log.setLevel(args.log_level)
-
-    # レポートファイルの準備
-    report = logging.getLogger('report')
-    if args.no_report:
-        report_handler = logging.NullHandler()
-    else:
-        report_handler = handlers.TimedRotatingFileHandler(
-            filename=args.report_file,
-            when='D',
-            interval=7,
-            backupCount=5,
-            encoding='utf-8'
-            )        
-        report_formatter = logging.Formatter('%(asctime)s %(message)s')
-        report_handler.setFormatter(report_formatter)
-    report.addHandler(report_handler)
-    report.setLevel(logging.INFO)
 
     # 設定ファイルの読み込み
     config = configparser.ConfigParser()
@@ -479,11 +496,39 @@ if __name__ == '__main__':
     # フィルター設定確認
     fail=False
     if not check_partial_match(
+            config.get('QzssDcReportJmaAshFall','LocalGovernments').split(','),
+            qzss_dcr_jma_local_government.values(),             
+            confcheck=True):
+        log.error('conf: QzssDcReportJmaAshFall.LocalGovernments have no valid keyword.'
+            + f'\n Valid Local Governments: {qzss_dcr_jma_local_government.values()}')
+        fail=True
+    if not check_partial_match(
             config.get('QzssDcReportJmaEarthquakeEarlyWarning','Regions').split(','),
             qzss_dcr_jma_eew_forecast_region.values(),             
             confcheck=True):
         log.error('conf: QzssDcReportJmaEarthquakeEarlyWarning.Regions have no valid keyword.'
             + f'\n Valid Regions: {qzss_dcr_jma_eew_forecast_region.values()}')
+        fail=True
+    if not check_partial_match(
+            config.get('QzssDcReportJmaFlood','Regions').split(','),
+            qzss_dcr_jma_flood_forecast_region.values(),             
+            confcheck=True):
+        log.error('conf: QzssDcReportJmaFlood.Regions have no valid keyword.'
+            + f'\n Valid Regions: {qzss_dcr_jma_flood_forecast_region.values()}')
+        fail=True
+    if not check_partial_match(
+            config.get('QzssDcReportJmaMarine','Regions').split(','),
+            qzss_dcr_jma_marine_forecast_region.values(),             
+            confcheck=True):
+        log.error('conf: QzssDcReportJmaMarine.Regions have no valid keyword.'
+            + f'\n Valid Regions: {qzss_dcr_jma_marine_forecast_region.values()}')
+        fail=True
+    if not check_partial_match(
+            config.get('QzssDcReportJmaNorthwestPacificTsunami','Regions').split(','),
+            qzss_dcr_jma_coastal_region_en.values(),             
+            confcheck=True):
+        log.error('conf: QzssDcReportJmaNorthwestPacificTsunami.regions have no valid keyword.'
+            + f'\n Valid Regions: {qzss_dcr_jma_coastal_region_en.values()}')
         fail=True
     if not check_partial_match(
             config.get('QzssDcReportJmaSeismicIntensity','Prefectures').split(','),
@@ -500,24 +545,10 @@ if __name__ == '__main__':
             + f'\n Valid Regions: {qzss_dcr_jma_tsunami_forecast_region.values()}')
         fail=True
     if not check_partial_match(
-            config.get('QzssDcReportJmaNorthwestPacificTsunami','Regions').split(','),
-            qzss_dcr_jma_coastal_region_en.values(),             
-            confcheck=True):
-        log.error('conf: QzssDcReportJmaNorthwestPacificTsunami.regions have no valid keyword.'
-            + f'\n Valid Regions: {qzss_dcr_jma_coastal_region_en.values()}')
-        fail=True
-    if not check_partial_match(
             config.get('QzssDcReportJmaVolcano','LocalGovernments').split(','),
             qzss_dcr_jma_local_government.values(),             
             confcheck=True):
         log.error('conf: QzssDcReportJmaVolcano.LocalGovernments have no valid keyword.'
-            + f'\n Valid Local Governments: {qzss_dcr_jma_local_government.values()}')
-        fail=True
-    if not check_partial_match(
-            config.get('QzssDcReportJmaAshFall','LocalGovernments').split(','),
-            qzss_dcr_jma_local_government.values(),             
-            confcheck=True):
-        log.error('conf: QzssDcReportJmaAshFall.LocalGovernments have no valid keyword.'
             + f'\n Valid Local Governments: {qzss_dcr_jma_local_government.values()}')
         fail=True
     if not check_partial_match(
@@ -527,20 +558,6 @@ if __name__ == '__main__':
         log.error('conf: QzssDcReportJmaWeather.Regions have no valid keyword.'
             + f'\n Valid Regions: {qzss_dcr_jma_weather_forecast_region.values()}')
         fail=True
-    if not check_partial_match(
-            config.get('QzssDcReportJmaFlood','Regions').split(','),
-            qzss_dcr_jma_flood_forecast_region.values(),             
-            confcheck=True):
-        log.error('conf: QzssDcReportJmaFlood.Regions have no valid keyword.'
-            + f'\n Valid Regions: {qzss_dcr_jma_flood_forecast_region.values()}')
-        fail=True
-    if not check_partial_match(
-            config.get('QzssDcReportJmaMarine','Regions').split(','),
-            qzss_dcr_jma_marine_forecast_region.values(),             
-            confcheck=True):
-        log.error('conf: QzssDcReportJmaMarine.Regions have no valid keyword.'
-            + f'\n Valid Regions: {qzss_dcr_jma_marine_forecast_region.values()}')
-        fail=True
     if fail:
         log.error('Terminate...')
         sys.exit(2)
@@ -549,5 +566,24 @@ if __name__ == '__main__':
         log.error('-t option set. not execute.')
         log.error('Terminate...')
         sys.exit(4)
+
+    # レポートファイルの準備
+    report = logging.getLogger('report')
+    if config.getboolean('ReportFile','Use'):
+        report_file = config.get('ReportFile','Path')
+        log.info(f'Report file is {report_file}')
+        report_handler = handlers.TimedRotatingFileHandler(
+            filename=report_file,
+            when=config.get('ReportFile','When'),
+            interval=config.getint('ReportFile','Interval'),
+            backupCount=config.getint('ReportFile','BackupCount'),
+            encoding='utf-8'
+            )
+        report_formatter = logging.Formatter('%(message)s')
+        report_handler.setFormatter(report_formatter)
+    else:
+        report_handler = logging.NullHandler()
+    report.addHandler(report_handler)
+    report.setLevel(logging.INFO)
 
     main()
