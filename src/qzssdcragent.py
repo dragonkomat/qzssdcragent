@@ -266,7 +266,7 @@ def process_report(dtcurrent:datetime, item):
     elif isinstance(item, qzss_dc_report.QzssDcReportJmaAshFall):
         if not config.getboolean('QzssDcReportJmaAshFall','Use'):
             log.info('DCReport: QzssDcReportJmaAshFall Skipped. (Use=0)')
-            return
+            filtered = True
         else:
             lg = config.get('QzssDcReportJmaAshFall','LocalGovernments').split(',')
             if not check_partial_match(lg, item.local_governments):
