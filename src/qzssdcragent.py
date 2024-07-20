@@ -440,13 +440,14 @@ def main():
                                 ,unique=False
                                 ,ignore_dcr=False
                                 ,ignore_dcx=False)
-                        except (azarashi.QzssDcrDecoderException, azarashi.QzssDcrDecoderNotImplementedError) as e:
-                            log.exception(e)
-                            log.error('decode_stream occurred exception! Retry...')
                         except Exception as e:
+                            # 例外を起こした場合はdecode_streamのループから抜けてコマンド実行をやり直す
                             log.exception(e)
-                            log.error('decode_stream occurred exception! Terminate...')
-                            sys.exit(3)
+                            log.warning('decode_stream occurred exception! decode_stream terminated.')
+                            break
+            
+            # コマンド実行を中止する
+            watchproc.terminate()
 
         except Exception as e:
             log.exception(e)
@@ -454,7 +455,7 @@ def main():
             sys.exit(3)
 
         # watch processが終了してしまった場合は5秒待ってから再度実行
-        log.warning('Watch process terminated. Retry after 5 seconds...')
+        log.warning('subprocess terminated. Retry after 5 seconds...')
         time.sleep(5)
 
 if __name__ == '__main__':
