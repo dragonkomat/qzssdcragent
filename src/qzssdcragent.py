@@ -70,7 +70,6 @@ DEFAULT_CONFIG = {
         },
     'QzssDcReportJmaNankaiTroughEarthquake' : {
         'Use':1,
-        'ReportIncompleteInfo':0,
         },
     'QzssDcReportJmaNorthwestPacificTsunami' : {
         'Use':1,
@@ -119,11 +118,13 @@ DEFAULT_CONFIG = {
         'When':'D',
         'Interval':7,
         'BackupCount':5,
+        'ReportIncompleteInfo':0,
         'IgnoreFilter':0,
         'ReportTraining':1,
         },
     'StdOut' : {
         'Use':0,
+        'ReportIncompleteInfo':0,
         'IgnoreFilter':0,
         'ReportTraining':1,
         },
@@ -137,6 +138,7 @@ DEFAULT_CONFIG = {
         'Tls':0,
         'Ssl':0,
         'SuplessHeaderFromText':1,
+        'ReportIncompleteInfo':0,
         'IgnoreFilter':0,
         'ReportTraining':1,
         },
@@ -207,9 +209,11 @@ def send_mail(subject:str, text:str, clsname:str):
         log.exception(e)
         log.warning(f'Mail: {clsname} send failed.')
 
-def process_mail(dt:datetime, item, filtered, training):
+def process_mail(dt:datetime, item, filtered, training, incomplete):
 
     if not config.getboolean('Mail','Use'):
+        return
+    if incomplete and not config.getboolean('Mail','ReportIncompleteInfo'):
         return
     if training and not config.getboolean('Mail','ReportTraining'):
         return
@@ -223,8 +227,10 @@ def process_mail(dt:datetime, item, filtered, training):
     text += f'\n\n情報受信時刻: {dt.strftime(DATETIME_FORMAT)}\n'
     send_mail(subject, text, item.__class__.__name__)
 
-def process_report_file(dtcurrent:datetime, item, filtered, training):
+def process_report_file(dtcurrent:datetime, item, filtered, training, incomplete):
 
+    if incomplete and not config.getboolean('ReportFile','ReportIncompleteInfo'):
+        return
     if training and not config.getboolean('ReportFile','ReportTraining'):
         return
     if filtered and not config.getboolean('ReportFile','IgnoreFilter'):
@@ -232,9 +238,11 @@ def process_report_file(dtcurrent:datetime, item, filtered, training):
     report.info(f'\n----- {dtcurrent.strftime(DATETIME_FORMAT)} --------------------')
     report.info(item)
 
-def process_stdout(dtcurrent:datetime, item, filtered, training):
+def process_stdout(dtcurrent:datetime, item, filtered, training, incomplete):
 
     if not config.getboolean('StdOut','Use'):
+        return
+    if incomplete and not config.getboolean('StdOut','ReportIncompleteInfo'):
         return
     if training and not config.getboolean('StdOut','ReportTraining'):
         return
@@ -256,6 +264,7 @@ def process_report(dtcurrent:datetime, item):
 
     # 各クラス毎の確認
     filtered = False
+    incomplete = False
     if isinstance(item, qzss_dc_report.QzssDcxNullMsg):
         # Nullメッセージは常に無視
         return
@@ -307,10 +316,9 @@ def process_report(dtcurrent:datetime, item):
         if not config.getboolean('QzssDcReportJmaNankaiTroughEarthquake','Use'):
             log.info('DCReport: QzssDcReportJmaNankaiTroughEarthquake Skipped. (Use=0)')
             filtered = True
-        elif not config.getboolean('QzssDcReportJmaNankaiTroughEarthquake','ReportIncompleteInfo') \
-                and not item.completed:
+        if not item.completed:
             log.info('DCReport: QzssDcReportJmaNankaiTroughEarthquake Skipped. (Incomplete)')
-            filtered = True
+            incomplete = True
     elif isinstance(item, qzss_dc_report.QzssDcReportJmaNorthwestPacificTsunami):
         if not config.getboolean('QzssDcReportJmaNorthwestPacificTsunami','Use'):
             log.info('DCReport: QzssDcReportJmaNorthwestPacificTsunami Skipped. (Use=0)')
@@ -374,11 +382,11 @@ def process_report(dtcurrent:datetime, item):
         filtered = False
 
     # レポートファイルへの出力
-    process_report_file(dt, item, filtered, training)
+    process_report_file(dt, item, filtered, training, incomplete)
     # メール送信
-    process_mail(dt, item, filtered, training)
+    process_mail(dt, item, filtered, training, incomplete)
     # 標準出力
-    process_stdout(dt, item, filtered, training)
+    process_stdout(dt, item, filtered, training, incomplete)
 
 def dcr_report_handler(report, *callback_args, **callback_kwargs):
 
