@@ -368,6 +368,22 @@ def process_report(dtcurrent:datetime, item):
             if not check_partial_match(regions, item.weather_forecast_regions):
                 log.info('DCReport: QzssDcReportJmaWeather Skipped. (Region not found)')
                 filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcxJAlert):
+        if not config.getboolean('QzssDcxJAlert','Use'):
+            log.info('DCReport: QzssDcxJAlert Skipped. (Use=0)')
+            filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcxLAlert):
+        if not config.getboolean('QzssDcxLAlert','Use'):
+            log.info('DCReport: QzssDcxLAlert Skipped. (Use=0)')
+            filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcxMTInfo):
+        if not config.getboolean('QzssDcxMTInfo','Use'):
+            log.info('DCReport: QzssDcxMTInfo Skipped. (Use=0)')
+            filtered = True
+    elif isinstance(item, qzss_dc_report.QzssDcxOutsideJapan):
+        if not config.getboolean('QzssDcxOutsideJapan','Use'):
+            log.info('DCReport: QzssDcxOutsideJapan Skipped. (Use=0)')
+            filtered = True
     else:
         log.warning(f'Unknown DCReport instance: {type(item)}\n{item}')
         return
