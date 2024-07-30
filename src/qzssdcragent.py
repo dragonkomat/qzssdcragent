@@ -270,7 +270,7 @@ def process_report(dtcurrent:datetime, item):
         return
     elif isinstance(item, qzss_dc_report.QzssDcxUnknown):
         # Unknownメッセージは警告を表示
-        log.warning(f'QzssDcxUnknown: {item}')
+        log.warning(f'QzssDcxUnknown: {type(item)}\n{item}')
         return
     elif isinstance(item, qzss_dc_report.QzssDcReportJmaAshFall):
         if not config.getboolean('QzssDcReportJmaAshFall','Use'):
@@ -369,7 +369,7 @@ def process_report(dtcurrent:datetime, item):
                 log.info('DCReport: QzssDcReportJmaWeather Skipped. (Region not found)')
                 filtered = True
     else:
-        log.warning(f'Unknown DCReport instance: {type(item)}')
+        log.warning(f'Unknown DCReport instance: {type(item)}\n{item}')
         return
 
     if item.timestamp is not None:
