@@ -219,11 +219,25 @@ def process_mail(dt:datetime, item, filtered, training, incomplete):
         return
     if filtered and not config.getboolean('Mail','IgnoreFilter'):
         return
-    subject = item.get_header()
+
     text = str(item)
-    if config.getboolean('Mail','SuplessHeaderFromText'):
-        # 本文に含まれるヘッダーを取り除く
-        text = text.replace(subject,'',1)
+
+    if isinstance(item, qzss_dc_report.QzssDcxJAlert):
+        subject = '災危情報: J-Alert'
+    elif isinstance(item, qzss_dc_report.QzssDcxLAlert):
+        subject = '災危情報: L-Alert'
+    elif isinstance(item, qzss_dc_report.QzssDcxMTInfo):
+        subject = '災危情報: Municipality-Transmitted Information'
+    elif isinstance(item, qzss_dc_report.QzssDcxOutsideJapan):
+        subject = '災危情報: Information from Organizations outside Japan'
+    elif isinstance(item, qzss_dc_report.QzssDcReportJmaBase):
+        subject = item.get_header()
+        if config.getboolean('Mail','SuplessHeaderFromText'):
+            # 本文に含まれるヘッダーを取り除く
+            text = text.replace(subject,'',1)
+    else:
+        subject = f'災危情報: 不明なクラス({type(item)})'
+
     text += f'\n\n情報受信時刻: {dt.strftime(DATETIME_FORMAT)}\n'
     send_mail(subject, text, item.__class__.__name__)
 
