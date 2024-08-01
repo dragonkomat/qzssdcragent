@@ -222,14 +222,21 @@ def process_mail(dt:datetime, item, filtered, training, incomplete):
 
     text = str(item)
 
-    if isinstance(item, qzss_dc_report.QzssDcxJAlert):
-        subject = '災危情報: J-Alert'
-    elif isinstance(item, qzss_dc_report.QzssDcxLAlert):
-        subject = '災危情報: L-Alert'
-    elif isinstance(item, qzss_dc_report.QzssDcxMTInfo):
-        subject = '災危情報: Municipality-Transmitted Information'
-    elif isinstance(item, qzss_dc_report.QzssDcxOutsideJapan):
-        subject = '災危情報: Information from Organizations outside Japan'
+    if isinstance(item, qzss_dc_report.QzssDcXtendedMessageBase):
+        if isinstance(item, qzss_dc_report.QzssDcxJAlert):
+            subject = 'J-Alert'
+        elif isinstance(item, qzss_dc_report.QzssDcxLAlert):
+            subject = 'L-Alert'
+        elif isinstance(item, qzss_dc_report.QzssDcxMTInfo):
+            subject = 'Municipality-Transmitted Information'
+        elif isinstance(item, qzss_dc_report.QzssDcxOutsideJapan):
+            subject = 'Information from Organizations outside Japan'
+        else:
+            subject = f'不明なクラス({type(item)})'
+        if training:
+            subject = '[Test]' + subject
+        subject = '災危情報: ' + subject
+
     elif isinstance(item, qzss_dc_report.QzssDcReportJmaBase):
         subject = item.get_header()
         if config.getboolean('Mail','SuplessHeaderFromText'):
