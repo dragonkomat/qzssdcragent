@@ -38,6 +38,7 @@ from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 import logging
 from logging import handlers
+import dill
 #import pdb
 
 import azarashi
@@ -47,6 +48,8 @@ from azarashi.qzss_dcr_lib.report import qzss_dc_report
 DATETIME_FORMAT = '%Y/%m/%d %H:%M:%S'
 
 DEFAULT_CONFPATH = '/etc/qzssdcragent.conf'
+
+DEFAULT_CACHEPATH = '/var/cache/qzssdcragent_cache.bin'
 
 DEFAULT_CONFIG = {
     'QzssDcReportJmaAshFall' : {
@@ -146,9 +149,20 @@ DEFAULT_CONFIG = {
 
 args:'argparse.Namespace' = None
 config:'configparser.ConfigParser' = None
-cache = []
+cache:'list' = None
 log:'logging.Logger' = None
 report:'logging.Logger' = None
+
+def remove_expired_cache(dtcurrent:datetime):
+
+    # 期限切れキャッシュの削除
+    validperiod = config.getint('Input','CacheValidPeriodHour')
+    dtexpire = dtcurrent - timedelta(hours=validperiod)
+    while len(cache) > 0:
+        dtcached, obj = cache[0]
+        if dtcached >= dtexpire:
+            break
+        cache.pop(0)
 
 def check_partial_match(conf_items, values, confcheck=False) -> bool:
 
@@ -441,17 +455,29 @@ def dcr_report_handler(report, *callback_args, **callback_kwargs):
         process_report(dtcurrent, report)
 
     # 期限切れキャッシュの削除
-    validperiod = config.getint('Input','CacheValidPeriodHour')
-    dtexpire = dtcurrent - timedelta(hours=validperiod)
-    while len(cache) > 0:
-        dtcached, obj = cache[0]
-        if dtcached >= dtexpire:
-            break
-        cache.pop(0)
+    remove_expired_cache(dtcurrent)
 
 def signal_handler(signum, frame):
 
     log.error(f'Signal handler called with signal {signum}.')
+
+    # キャッシュのダンプ
+    if args.nodump_cache:
+        log.warning('cache dump skipped.')
+    else:
+        log.info('dumping cache...')
+        try:
+            with open(args.cache_file, 'wb') as f:
+                dill.dump(cache, f)
+            log.info(f'cache dump completed. (count={len(cache)})')
+        except Exception as e:
+            log.exception(e)
+            log.warning('cache dump failed.')
+            try:
+                os.remove(args.cache_file)
+            except Exception as e:
+                pass
+
     log.error('Terminate...')
     sys.exit(1)
 
@@ -516,8 +542,11 @@ if __name__ == '__main__':
     # コマンドパラメーターの解析
     parser = argparse.ArgumentParser()
     parser.add_argument('-c',action='store',dest='config_file',default=DEFAULT_CONFPATH)
+    parser.add_argument('-s',action='store',dest='cache_file',default=DEFAULT_CACHEPATH)
     parser.add_argument('-l',action='store',dest='log_level',type=int,default=logging.INFO)
     parser.add_argument('-t',action='store_true',dest='test_only',default=False)
+    parser.add_argument('-x',action='store_true',dest='noload_cache',default=False)
+    parser.add_argument('-y',action='store_true',dest='nodump_cache',default=False)
     args = parser.parse_args()
 
     # ログの準備
@@ -631,5 +660,24 @@ if __name__ == '__main__':
         report_handler = logging.NullHandler()
     report.addHandler(report_handler)
     report.setLevel(logging.INFO)
+
+    # キャッシュのロード
+    log.info(f'cache file is {args.cache_file}')
+    if args.noload_cache:
+        log.warning('cache load skipped.')
+    else:
+        log.info('loading cache...')
+        try:
+            with open(args.cache_file, 'rb') as f:
+                cache = dill.load(f)
+            log.info(f'cache load completed. (count={len(cache)})')
+            remove_expired_cache(datetime.now())
+        except FileNotFoundError as e:
+            log.warning('cache file not found.')
+        except Exception as e:
+            log.exception(e)
+            log.warning('cache load failed.')
+        if cache is None:
+            cache = []
 
     main()

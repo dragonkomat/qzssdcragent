@@ -13,11 +13,12 @@ qzssdcragent (災害・危機管理通報受信エージェント)
 
 必要なソフトウェア
 -
-* Ubuntu 24.04 LTS (動作確認済みのバージョン)
+* Ubuntu 24.04.1 LTS (動作確認済みのバージョン)
 * gpsd
 * gpsd-clients
 * python3 (3.12.3で動作確認済み)
 * python3-pip
-* (pip3) azarashi (0.10.2)
+* (pip3) azarashi (0.11.0で動作確認済み)
+* (pip3) dill
 
 (作成中)
