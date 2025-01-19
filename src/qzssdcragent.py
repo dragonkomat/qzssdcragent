@@ -38,6 +38,8 @@ from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 import logging
 from logging import handlers
+import threading
+import queue
 import dill
 #import pdb
 
@@ -114,6 +116,7 @@ DEFAULT_CONFIG = {
         'Type':'ublox',
         'CacheValidPeriodHour':24,
         'IgnoreFilterWhenTraining':1,
+        'NoMessageTimeout':60,
         },
     'ReportFile' : {
         'Use':1,
@@ -152,6 +155,26 @@ config:'configparser.ConfigParser' = None
 cache:'list' = None
 log:'logging.Logger' = None
 report:'logging.Logger' = None
+
+message_watcher_queue = queue.Queue()
+
+def message_watcher():
+
+    # メッセージ監視スレッド
+    timeout_value = config.getint('Input','NoMessageTimeout')
+    timeout_occurred = False
+    log.info(f'message watcher started. (timeout={timeout_value}s)')
+
+    while True:
+        try:
+            message_watcher_queue.get(True, float(timeout_value))
+            if timeout_occurred:
+                log.warning('message has received again.')
+            timeout_occurred = False
+        except queue.Empty as e:
+            if not timeout_occurred:
+                log.warning(f'no message received in {timeout_value} seconds.')
+            timeout_occurred = True
 
 def remove_expired_cache(dtcurrent:datetime):
 
@@ -302,6 +325,7 @@ def process_report(dtcurrent:datetime, item):
     incomplete = False
     if isinstance(item, qzss_dc_report.QzssDcxNullMsg):
         # Nullメッセージは常に無視
+        # dcr_report_handlerで処理されるので、ここには来ない
         return
     elif isinstance(item, qzss_dc_report.QzssDcxUnknown):
         # Unknownメッセージは警告を表示
@@ -440,6 +464,13 @@ def process_report(dtcurrent:datetime, item):
     process_stdout(dt, item, filtered, training, incomplete)
 
 def dcr_report_handler(report, *callback_args, **callback_kwargs):
+
+    # メッセージ監視スレッドにNoneを送信する
+    message_watcher_queue.put(None)
+
+    # nullメッセージの場合はキャッシュに蓄積せずにここで完了
+    if isinstance(report, qzss_dc_report.QzssDcxNullMsg):
+        return
 
     # 受信時刻
     dtcurrent = datetime.now() 
@@ -679,5 +710,11 @@ if __name__ == '__main__':
             log.warning('cache load failed.')
         if cache is None:
             cache = []
+
+    # メッセージ監視スレッドの開始
+    thread = threading.Thread(
+        target=message_watcher,
+        daemon=True)
+    thread.start()
 
     main()
