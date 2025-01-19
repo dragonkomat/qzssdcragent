@@ -459,7 +459,7 @@ def dcr_report_handler(report, *callback_args, **callback_kwargs):
 
 def signal_handler(signum, frame):
 
-    log.error(f'Signal handler called with signal {signum}.')
+    log.warning(f'Signal handler called with signal {signum}.')
 
     # キャッシュのダンプ
     if args.nodump_cache:
@@ -478,8 +478,8 @@ def signal_handler(signum, frame):
             except Exception as e:
                 pass
 
-    log.error('Terminate...')
-    sys.exit(1)
+    log.warning('Terminate...')
+    sys.exit(0)
 
 def main():
 
