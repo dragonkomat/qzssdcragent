@@ -234,7 +234,7 @@ def process_mail(dt:datetime, item, filtered, training, incomplete):
         else:
             subject = f'不明なクラス({type(item)})'
         if training:
-            subject = '[Test]' + subject
+            subject = '[訓練/試験]' + subject
         subject = '災危情報: ' + subject
 
     elif isinstance(item, qzss_dc_report.QzssDcReportJmaBase):
