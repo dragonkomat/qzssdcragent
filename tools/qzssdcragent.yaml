@@ -1,0 +1,62 @@
+Report:
+  Default:
+    Use: True
+    Filter: []
+    Output:
+      ReportFile: True
+      StdOut: True
+      Email: False
+    OutputTraining:
+      ReportFile: True
+      StdOut: True
+      Email: False
+
+  QzssDcReportJmaAshFall:
+
+  QzssDcReportJmaEarthquakeEarlyWarning:
+
+  QzssDcReportJmaFlood:
+
+  QzssDcReportJmaMarine:
+
+  QzssDcxNullMsg:
+    Use: False
+
+Input:
+  Cmdline: "gpspipe -R"
+  # type: hex,nmea,ublox
+  Type: "ublox"
+  CacheValidPeriodHour: 24
+  NoMessageTimeout: 60
+
+Output:
+  ReportFile:
+    Use: True
+    Path: "qzssdcragent.log"
+    When: "D"
+    Interval: 7
+    BackupCount: 5
+    WithNmea: True
+    WithFilteredNmea: True
+    EmailStyle: False
+    BlockTraining: False
+
+  StdOut:
+    Use: True
+    WithNmea: True
+    WithFilteredNmea: True
+    EmailStyle: False
+    BlockTraining: False
+
+  Email:
+    Use: False
+    BlockTraining: False
+    Host:
+    Port: 0
+    Id:
+    Password:
+    Address:
+    Tls: False
+    Ssl: False
+
+Common:
