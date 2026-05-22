@@ -1,0 +1,3 @@
+azarashi==0.16.0
+dill==0.4.1
+ruamel.yaml==0.19.1
